@@ -30,20 +30,20 @@ public class Main {
         Deque<Token> openTemplates = new ArrayDeque<>();
         Deque<Token> openExpressions = new ArrayDeque<>();
 
-//        lexer.removeErrorListeners();
-//        lexer.addErrorListener(new BaseErrorListener() {
-//            @Override
-//            public void syntaxError(
-//                    Recognizer<?, ?> recognizer,
-//                    Object offendingSymbol,
-//                    int line,
-//                    int column,
-//                    String message,
-//                    RecognitionException exception) {
-//                errors.add("Error at " + line + ":" + column
-//                        + " - " + message);
-//            }
-//        });
+        // lexer.removeErrorListeners();
+        // lexer.addErrorListener(new BaseErrorListener() {
+        //     @Override
+        //     public void syntaxError(
+        //             Recognizer<?, ?> recognizer,
+        //             Object offendingSymbol,
+        //             int line,
+        //             int column,
+        //             String message,
+        //             RecognitionException exception) {
+        //         errors.add("Error at " + line + ":" + column
+        //                 + " - " + message);
+        //     }
+        // });
 
         while (true) {
             Token token = lexer.nextToken();
