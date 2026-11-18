@@ -1,7 +1,8 @@
 lexer grammar MiniJS;
 
 // The mode stack tracks template expressions and their nested braces.
-// No Java actions or predicates are needed in this grammar.
+// Java context distinguishes regex literals from division (see MiniJSLexerBase).
+options { superClass=MiniJSLexerBase; }
 
 // ================= PART 1: KEYWORDS =================
 
@@ -106,6 +107,7 @@ BIT_OR        : '|';
 BIT_XOR       : '^';
 BIT_NOT       : '~';
 
+OPTIONAL_CHAIN : '?.' { !(_input.LA(1) >= '0' && _input.LA(1) <= '9') }?;
 QUESTION      : '?';
 
 // ================= PART 1: PUNCTUATION =================
@@ -173,7 +175,8 @@ INVALID_EXPONENT
     ;
 
 INVALID_NUMBER
-    : DIGIT [a-zA-Z0-9_$]*
+    : FLOAT [a-zA-Z_$] [a-zA-Z0-9_$]*
+    | DIGIT [a-zA-Z0-9_$]*
       ('.' [a-zA-Z0-9_$]+)?
     | '.' DECIMAL_DIGITS
       [a-zA-Z_$] [a-zA-Z0-9_$]*
@@ -221,18 +224,31 @@ STRING
     | '\'' (STRING_ESCAPE | ~['\\\r\n\u2028\u2029])* '\''
     ;
 
+// A broad fallback keeps malformed escapes in one diagnostic token.
+INVALID_STRING
+    : '"' (RAW_ESCAPE | ~["\\\r\n\u2028\u2029])* '"'
+    | '\'' (RAW_ESCAPE | ~['\\\r\n\u2028\u2029])* '\''
+    ;
+
+fragment RAW_ESCAPE : '\\' (LINE_TERMINATOR | ~[\r\n\u2028\u2029]);
+
 // Unterminated strings
 UNCLOSED_STRING
-    : '"' (STRING_ESCAPE | ~["\\\r\n\u2028\u2029])*
+    : '"' (RAW_ESCAPE | ~["\\\r\n\u2028\u2029])*
           '\\'? (LINE_TERMINATOR | EOF)
 
-    | '\'' (STRING_ESCAPE | ~['\\\r\n\u2028\u2029])*
+    | '\'' (RAW_ESCAPE | ~['\\\r\n\u2028\u2029])*
           '\\'? (LINE_TERMINATOR | EOF)
     ;
 
 // Escaped characters
 fragment STRING_ESCAPE
-    : '\\' (LINE_TERMINATOR | ~[\r\n\u2028\u2029])
+    : '\\' (LINE_TERMINATOR
+      | 'x' HEX_DIGIT HEX_DIGIT
+      | 'u' (HEX_DIGIT HEX_DIGIT HEX_DIGIT HEX_DIGIT
+            | '{' HEX_DIGIT+ '}' { unicodeEscapeInRange() }?)
+      | '0' { !(_input.LA(1) >= '0' && _input.LA(1) <= '9') }?
+      | ~[xu0-9\r\n\u2028\u2029])
     ;
 
 // Line terminators
@@ -240,6 +256,23 @@ fragment LINE_TERMINATOR
     : '\r\n'
     | [\r\n\u2028\u2029]
     ;
+
+// Regex bodies shield braces, slashes in character classes and escaped slashes.
+REGEX
+    : { isRegexPossible() }? '/' REGEX_FIRST REGEX_CHAR* '/' [a-zA-Z]*
+    ;
+UNCLOSED_REGEX
+    : { isRegexPossible() }? '/' REGEX_FIRST REGEX_CHAR* '\\'?
+      (LINE_TERMINATOR | EOF)
+    ;
+fragment REGEX_FIRST
+    : REGEX_ESCAPE | REGEX_CLASS | ~[*/\\\r\n\u2028\u2029\u005B]
+    ;
+fragment REGEX_CHAR
+    : REGEX_ESCAPE | REGEX_CLASS | ~[/\\\r\n\u2028\u2029\u005B]
+    ;
+fragment REGEX_ESCAPE : '\\' ~[\r\n\u2028\u2029];
+fragment REGEX_CLASS : '[' (REGEX_ESCAPE | ~[\]\\\r\n\u2028\u2029])* ']';
 
 // ================= PART 3: COMMENTS =================
 
@@ -268,7 +301,7 @@ IDENTIFIER
 // ================= WHITESPACE =================
 
 WS
-    : [ \t\r\n\u2028\u2029]+ -> skip
+    : [ \t\r\n\u000B\u000C\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]+ -> skip
     ;
 
 // ================= PART 4: TEMPLATE START =================
@@ -309,12 +342,10 @@ TEMPLATE_TEXT
 TEMPLATE_DOLLAR
     : '$' -> type(TEMPLATE_TEXT)
     ;
-
 // Code inside ${...}.
 mode INTERPOLATION_MODE;
 
-// Reuse the default patterns in the same priority order.
-// type(...) preserves the public token types used by Main.
+// Keep token types and priority consistent with DEFAULT_MODE.
 EXPR_LET : LET -> type(LET);
 EXPR_CONST : CONST -> type(CONST);
 EXPR_VAR : VAR -> type(VAR);
@@ -398,6 +429,7 @@ EXPR_BIT_AND : BIT_AND -> type(BIT_AND);
 EXPR_BIT_OR : BIT_OR -> type(BIT_OR);
 EXPR_BIT_XOR : BIT_XOR -> type(BIT_XOR);
 EXPR_BIT_NOT : BIT_NOT -> type(BIT_NOT);
+EXPR_OPTIONAL_CHAIN : OPTIONAL_CHAIN -> type(OPTIONAL_CHAIN);
 EXPR_QUESTION : QUESTION -> type(QUESTION);
 EXPR_ELLIPSIS : ELLIPSIS -> type(ELLIPSIS);
 EXPR_LPAREN : LPAREN -> type(LPAREN);
@@ -419,7 +451,10 @@ EXPR_INTEGER : INTEGER -> type(INTEGER);
 EXPR_INVALID_EXPONENT : INVALID_EXPONENT -> type(INVALID_EXPONENT);
 EXPR_INVALID_NUMBER : INVALID_NUMBER -> type(INVALID_NUMBER);
 EXPR_STRING : STRING -> type(STRING);
+EXPR_INVALID_STRING : INVALID_STRING -> type(INVALID_STRING);
 EXPR_UNCLOSED_STRING : UNCLOSED_STRING -> type(UNCLOSED_STRING);
+EXPR_REGEX : REGEX -> type(REGEX);
+EXPR_UNCLOSED_REGEX : UNCLOSED_REGEX -> type(UNCLOSED_REGEX);
 EXPR_LINE_COMMENT : LINE_COMMENT -> type(LINE_COMMENT);
 EXPR_BLOCK_COMMENT : BLOCK_COMMENT -> type(BLOCK_COMMENT);
 EXPR_UNCLOSED_BLOCK_COMMENT : UNCLOSED_BLOCK_COMMENT -> type(UNCLOSED_BLOCK_COMMENT);
@@ -431,8 +466,7 @@ EXPR_INVALID_CHAR : INVALID_CHAR -> type(INVALID_CHAR);
 // Code inside nested {...} within an interpolation.
 mode BRACE_MODE;
 
-// Reuse the default patterns in the same priority order.
-// type(...) preserves the public token types used by Main.
+// Keep token types and priority consistent with DEFAULT_MODE.
 BRACE_LET : LET -> type(LET);
 BRACE_CONST : CONST -> type(CONST);
 BRACE_VAR : VAR -> type(VAR);
@@ -516,6 +550,7 @@ BRACE_BIT_AND : BIT_AND -> type(BIT_AND);
 BRACE_BIT_OR : BIT_OR -> type(BIT_OR);
 BRACE_BIT_XOR : BIT_XOR -> type(BIT_XOR);
 BRACE_BIT_NOT : BIT_NOT -> type(BIT_NOT);
+BRACE_OPTIONAL_CHAIN : OPTIONAL_CHAIN -> type(OPTIONAL_CHAIN);
 BRACE_QUESTION : QUESTION -> type(QUESTION);
 BRACE_ELLIPSIS : ELLIPSIS -> type(ELLIPSIS);
 BRACE_LPAREN : LPAREN -> type(LPAREN);
@@ -537,7 +572,10 @@ BRACE_INTEGER : INTEGER -> type(INTEGER);
 BRACE_INVALID_EXPONENT : INVALID_EXPONENT -> type(INVALID_EXPONENT);
 BRACE_INVALID_NUMBER : INVALID_NUMBER -> type(INVALID_NUMBER);
 BRACE_STRING : STRING -> type(STRING);
+BRACE_INVALID_STRING : INVALID_STRING -> type(INVALID_STRING);
 BRACE_UNCLOSED_STRING : UNCLOSED_STRING -> type(UNCLOSED_STRING);
+BRACE_REGEX : REGEX -> type(REGEX);
+BRACE_UNCLOSED_REGEX : UNCLOSED_REGEX -> type(UNCLOSED_REGEX);
 BRACE_LINE_COMMENT : LINE_COMMENT -> type(LINE_COMMENT);
 BRACE_BLOCK_COMMENT : BLOCK_COMMENT -> type(BLOCK_COMMENT);
 BRACE_UNCLOSED_BLOCK_COMMENT : UNCLOSED_BLOCK_COMMENT -> type(UNCLOSED_BLOCK_COMMENT);

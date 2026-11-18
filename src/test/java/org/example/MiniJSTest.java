@@ -37,9 +37,93 @@ class MiniJSTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"'It\\'s a \"beautiful\" day'", "\"abc\\\ndef\"",
-            "\"abc\\\r\ndef\"", "\"\\xZZ\"", "\"\\q\""})
+            "\"abc\\\r\ndef\"", "\"\\x41\"", "\"\\q\"",
+            "\"\\u0041\"", "\"\\u{1F600}\"", "\"\\0\""})
     void requiredEscapesAndContinuations(String text) {
         assertEquals(List.of(MiniJS.STRING), types(text));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"\"\\xZZ\"", "\"\\x1\"", "'\\u12'", "\"\\u{}\"",
+            "\"\\u{110000}\"", "\"\\u{FFFFFFFFFFFFFFFF}\"", "\"\\08\""})
+    void invalidEscapesAreOneErrorAndRecover(String source) throws Exception {
+        assertEquals(List.of(MiniJS.INVALID_STRING, MiniJS.SEMI, MiniJS.LET,
+                MiniJS.IDENTIFIER, MiniJS.ASSIGN, MiniJS.INTEGER), types(source + "; let x=1"));
+        assertTrue(report(source).contains("--- Lexical Errors: 1 ---"));
+        assertEquals(MiniJS.INVALID_STRING, types("`${" + source + "}`").get(2));
+        assertEquals(MiniJS.INVALID_STRING, types("`${{" + source + "}}`").get(3));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"1.2foo", "1.2_", ".5foo", "1.foo", "123nfoo"})
+    void malformedNumberSuffixIsOneError(String source) {
+        assertEquals(List.of(MiniJS.INVALID_NUMBER, MiniJS.SEMI), types(source + ";"));
+        assertEquals(MiniJS.INVALID_NUMBER, types("`${" + source + "}`").get(2));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"1e+2foo", "1.2e-3foo", ".5e+2_", "1e+"})
+    void malformedExponentIsOneError(String source) {
+        assertEquals(List.of(MiniJS.INVALID_EXPONENT), types(source));
+    }
+
+    @Test void optionalChainDoesNotConsumeConditionalDecimal() {
+        assertEquals(List.of(MiniJS.IDENTIFIER, MiniJS.OPTIONAL_CHAIN, MiniJS.IDENTIFIER,
+                MiniJS.OPTIONAL_CHAIN, MiniJS.LBRACKET, MiniJS.INTEGER, MiniJS.RBRACKET),
+                types("user?.items?.[0]"));
+        assertEquals(List.of(MiniJS.IDENTIFIER, MiniJS.QUESTION, MiniJS.FLOAT,
+                MiniJS.COLON, MiniJS.INTEGER), types("ok?.3:0"));
+        assertEquals(MiniJS.OPTIONAL_CHAIN, types("`${user?.name}`").get(3));
+    }
+
+    @Test void additionalWhitespaceIsSkippedButIdentifiersRemainAscii() {
+        assertEquals(List.of(MiniJS.LET, MiniJS.IDENTIFIER, MiniJS.ASSIGN, MiniJS.INTEGER),
+                types("\uFEFFlet\u00A0x\u000B=\u20031"));
+        assertEquals(List.of(MiniJS.INVALID_CHAR), types("\u0627"));
+    }
+
+    @Test void regexAndDivisionKeepTheirContexts() {
+        assertEquals(List.of(MiniJS.REGEX, MiniJS.DOT, MiniJS.IDENTIFIER,
+                MiniJS.LPAREN, MiniJS.IDENTIFIER, MiniJS.RPAREN), types("/[}/]+/g.test(x)"));
+        assertEquals(List.of(MiniJS.IDENTIFIER, MiniJS.DIVIDE, MiniJS.INTEGER,
+                MiniJS.DIVIDE, MiniJS.INTEGER), types("x / 2 / 3"));
+        assertEquals(List.of(MiniJS.IDENTIFIER, MiniJS.DIVIDE_ASSIGN, MiniJS.INTEGER), types("x /= 2"));
+        assertEquals(List.of(MiniJS.TEMPLATE_START, MiniJS.TEMPLATE_EXPR_START,
+                MiniJS.REGEX, MiniJS.DOT, MiniJS.IDENTIFIER, MiniJS.LPAREN,
+                MiniJS.IDENTIFIER, MiniJS.RPAREN, MiniJS.TEMPLATE_EXPR_END,
+                MiniJS.TEMPLATE_END), types("`${ /}/.test(value) }`"));
+        assertEquals(MiniJS.REGEX, types("if (x) /abc/.test(x)").get(4));
+        assertEquals(MiniJS.DIVIDE, types("f(x) / 2").get(4));
+        assertEquals(MiniJS.REGEX, types("`${{x:/}/}}`").get(5));
+        assertEquals(List.of(MiniJS.REGEX), types("/a\\/b/gi"));
+    }
+
+    @Test void unfinishedRegexRecoversAtNextLine() throws Exception {
+        assertEquals(List.of(MiniJS.UNCLOSED_REGEX, MiniJS.LET, MiniJS.IDENTIFIER,
+                MiniJS.ASSIGN, MiniJS.INTEGER), types("/abc\nlet x=1"));
+        assertTrue(report("/abc").contains("--- Lexical Errors: 1 ---"));
+    }
+
+    @Test void resetClearsRegexContext() {
+        var lexer = new MiniJS(CharStreams.fromString("x"));
+        lexer.getAllTokens();
+        lexer.setInputStream(CharStreams.fromString("/abc/"));
+        assertEquals(MiniJS.REGEX, lexer.nextToken().getType());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"obj.return / 2 / 3", "obj.if(x) / 2 / 3",
+            "let f = function() {} / 2 / 3", "let f = () => {} / 2 / 3",
+            "let x = {} / 2 / 3"})
+    void expressionEndKeepsDivision(String source) {
+        var tokens = types(source);
+        assertFalse(tokens.contains(MiniJS.REGEX));
+        assertEquals(2, tokens.stream().filter(t -> t == MiniJS.DIVIDE).count());
+    }
+
+    @Test void declarationAndBlockAllowFollowingRegexStatement() {
+        assertEquals(MiniJS.REGEX, types("function f() {} /abc/").get(6));
+        assertEquals(MiniJS.REGEX, types("if (x) {} /abc/").get(6));
     }
 
     @Test void numbers() {
