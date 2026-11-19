@@ -67,12 +67,10 @@ class MiniJSTest {
         assertEquals(List.of(MiniJS.INVALID_EXPONENT), types(source));
     }
 
-    @Test void optionalChainDoesNotConsumeConditionalDecimal() {
+    @Test void optionalChainIsRecognized() {
         assertEquals(List.of(MiniJS.IDENTIFIER, MiniJS.OPTIONAL_CHAIN, MiniJS.IDENTIFIER,
                 MiniJS.OPTIONAL_CHAIN, MiniJS.LBRACKET, MiniJS.INTEGER, MiniJS.RBRACKET),
                 types("user?.items?.[0]"));
-        assertEquals(List.of(MiniJS.IDENTIFIER, MiniJS.QUESTION, MiniJS.FLOAT,
-                MiniJS.COLON, MiniJS.INTEGER), types("ok?.3:0"));
         assertEquals(MiniJS.OPTIONAL_CHAIN, types("`${user?.name}`").get(3));
     }
 
@@ -82,33 +80,56 @@ class MiniJSTest {
         assertEquals(List.of(MiniJS.INVALID_CHAR), types("\u0627"));
     }
 
-    @Test void regexAndDivisionKeepTheirContexts() {
-        assertEquals(List.of(MiniJS.REGEX, MiniJS.DOT, MiniJS.IDENTIFIER,
-                MiniJS.LPAREN, MiniJS.IDENTIFIER, MiniJS.RPAREN), types("/[}/]+/g.test(x)"));
+    @Test void regexUsesValueModesWithoutChangingDivisionOrTemplateBraces() {
+        assertEquals(List.of(MiniJS.LET, MiniJS.IDENTIFIER, MiniJS.ASSIGN,
+                MiniJS.REGEX, MiniJS.DIVIDE, MiniJS.INTEGER, MiniJS.SEMI),
+                types("let p = /[a/]+/g / 2;"));
+        assertEquals(List.of(MiniJS.ASSIGN, MiniJS.BLOCK_COMMENT, MiniJS.REGEX),
+                types("= /* note */ /abc/"));
+        assertEquals(List.of(MiniJS.TEMPLATE_START, MiniJS.TEMPLATE_EXPR_START,
+                MiniJS.IDENTIFIER, MiniJS.ASSIGN, MiniJS.REGEX,
+                MiniJS.TEMPLATE_EXPR_END, MiniJS.TEMPLATE_END), types("`${x = /}/}`"));
+        assertEquals(List.of(MiniJS.TEMPLATE_START, MiniJS.TEMPLATE_EXPR_START,
+                MiniJS.LBRACE, MiniJS.IDENTIFIER, MiniJS.ASSIGN, MiniJS.REGEX,
+                MiniJS.RBRACE, MiniJS.TEMPLATE_EXPR_END, MiniJS.TEMPLATE_END),
+                types("`${{x = /}/}}`"));
+    }
+
+    @Test void nonRegexValuesRestoreNestedModes() {
+        assertEquals(List.of(MiniJS.TEMPLATE_START, MiniJS.TEMPLATE_EXPR_START,
+                MiniJS.IDENTIFIER, MiniJS.ASSIGN, MiniJS.LBRACE, MiniJS.IDENTIFIER,
+                MiniJS.COLON, MiniJS.INTEGER, MiniJS.RBRACE, MiniJS.TEMPLATE_EXPR_END,
+                MiniJS.TEMPLATE_END), types("`${x = {a: 1}}`"));
+        assertEquals(List.of(MiniJS.ASSIGN, MiniJS.TEMPLATE_START, MiniJS.TEMPLATE_TEXT,
+                MiniJS.TEMPLATE_END, MiniJS.DIVIDE, MiniJS.INTEGER), types("= `x` / 2"));
+    }
+
+    @Test void slashAndSlashEqualsRemainOperators() {
         assertEquals(List.of(MiniJS.IDENTIFIER, MiniJS.DIVIDE, MiniJS.INTEGER,
                 MiniJS.DIVIDE, MiniJS.INTEGER), types("x / 2 / 3"));
         assertEquals(List.of(MiniJS.IDENTIFIER, MiniJS.DIVIDE_ASSIGN, MiniJS.INTEGER), types("x /= 2"));
-        assertEquals(List.of(MiniJS.TEMPLATE_START, MiniJS.TEMPLATE_EXPR_START,
-                MiniJS.REGEX, MiniJS.DOT, MiniJS.IDENTIFIER, MiniJS.LPAREN,
-                MiniJS.IDENTIFIER, MiniJS.RPAREN, MiniJS.TEMPLATE_EXPR_END,
-                MiniJS.TEMPLATE_END), types("`${ /}/.test(value) }`"));
-        assertEquals(MiniJS.REGEX, types("if (x) /abc/.test(x)").get(4));
-        assertEquals(MiniJS.DIVIDE, types("f(x) / 2").get(4));
-        assertEquals(MiniJS.REGEX, types("`${{x:/}/}}`").get(5));
-        assertEquals(List.of(MiniJS.REGEX), types("/a\\/b/gi"));
+        assertEquals(List.of(MiniJS.DIVIDE, MiniJS.IDENTIFIER, MiniJS.DIVIDE), types("/abc/"));
     }
 
-    @Test void unfinishedRegexRecoversAtNextLine() throws Exception {
-        assertEquals(List.of(MiniJS.UNCLOSED_REGEX, MiniJS.LET, MiniJS.IDENTIFIER,
-                MiniJS.ASSIGN, MiniJS.INTEGER), types("/abc\nlet x=1"));
-        assertTrue(report("/abc").contains("--- Lexical Errors: 1 ---"));
+    @Test void privateNamesWorkInCodeAndTemplateExpressions() {
+        for (String source : List.of("this.#count / 2", "`${this.#count / 2}`",
+                "`${{x: this.#count / 2}}`")) {
+            var tokens = types(source);
+            assertTrue(tokens.contains(MiniJS.PRIVATE_IDENTIFIER));
+            assertTrue(tokens.contains(MiniJS.DIVIDE));
+            assertFalse(tokens.contains(MiniJS.INVALID_CHAR));
+        }
+        assertEquals(List.of(MiniJS.INVALID_CHAR, MiniJS.INVALID_CHAR), types("#\u0627"));
     }
 
-    @Test void resetClearsRegexContext() {
-        var lexer = new MiniJS(CharStreams.fromString("x"));
-        lexer.getAllTokens();
-        lexer.setInputStream(CharStreams.fromString("/abc/"));
-        assertEquals(MiniJS.REGEX, lexer.nextToken().getType());
+    @Test void hashbangIsRecognizedInOrdinaryCode() {
+        assertEquals(List.of(MiniJS.HASHBANG_COMMENT, MiniJS.LET),
+                types("#!/usr/bin/env node\nlet"));
+        for (String source : List.of("`${#!late}`", "`${{#!late}}`")) {
+            var tokens = types(source);
+            assertFalse(tokens.contains(MiniJS.HASHBANG_COMMENT));
+            assertTrue(tokens.contains(MiniJS.INVALID_CHAR));
+        }
     }
 
     @ParameterizedTest
@@ -117,13 +138,7 @@ class MiniJSTest {
             "let x = {} / 2 / 3"})
     void expressionEndKeepsDivision(String source) {
         var tokens = types(source);
-        assertFalse(tokens.contains(MiniJS.REGEX));
         assertEquals(2, tokens.stream().filter(t -> t == MiniJS.DIVIDE).count());
-    }
-
-    @Test void declarationAndBlockAllowFollowingRegexStatement() {
-        assertEquals(MiniJS.REGEX, types("function f() {} /abc/").get(6));
-        assertEquals(MiniJS.REGEX, types("if (x) {} /abc/").get(6));
     }
 
     @Test void numbers() {

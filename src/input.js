@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // =====================================
 // PART 1 - KEYWORDS AND OPERATORS
 // =====================================
@@ -93,12 +94,58 @@ let division = 20 / 4;
 let remainder = 10 % 3;
 0/0
 
-"dfgfgdf
-dfgdgfdf"
+// =====================================
+// PART 5 - SPECIAL CASES
+// =====================================
 
-345__2346
+class Counter {
+    #count = 0;
+    increment() { return ++this.#count; }
+}
 
-name = `somthing ${x}
+let optionalName = profile?.name ?? "Unknown";
+let optionalItem = items?.[0];
+let conditional = ready ? .3 : 0;
 
+let hexDigits = 0xAB_CD;
+let binaryDigits = 0b1010_0101;
+let octalBigInt = 0o7_123n;
+let exponentDigits = 1.2_5e+1_0;
 
-345__2346
+let hexEscape = "\x41";
+let unicodeEscape = "\u0041";
+let unicodePoint = "\u{1F600}";
+let literalEscape = "\\xzz";
+let nullEscape = "\0A";
+
+// The next lines contain a real NBSP and a real U+FEFF.
+let withNbsp = 1;
+let﻿withFeff = 2;
+
+let pattern = /abc/g;
+let characterClass = /* before the value */ /[a/]+/g;
+let escapedSlash = /a\/b/i;
+let chainedDivision = 12 / 2 / 3;
+chainedDivision /= 2;
+let regexThenDivision = /abc/ / 2;
+
+let regexInTemplate = `${pattern = /}/}`;
+let regexInNestedBraces = `${{p: (pattern = /}/)}.p}`;
+
+// =====================================
+// PART 6 - INTENTIONAL LEXICAL ERRORS
+// =====================================
+
+let badHexEscape = "\xZZ";       // INVALID_STRING
+let shortHexEscape = "\x4";       // INVALID_STRING
+let badCodePoint = "\u{110000}";  // INVALID_STRING
+let badNullEscape = "\08";        // INVALID_STRING
+let badNumber = 345__2346;        // INVALID_NUMBER
+let attachedName = 5.5foo;       // INVALID_NUMBER
+let badExponent = 1e+;          // INVALID_EXPONENT
+@                                // INVALID_CHAR
+let unclosedString = "unfinished
+let recovery = 42;
+
+// This case goes last and ends immediately after the backslash.
+let unclosedTemplate = `Hello ${user}\

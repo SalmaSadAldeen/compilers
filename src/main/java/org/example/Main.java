@@ -107,7 +107,6 @@ public class Main {
                 || type == MiniJS.INVALID_NUMBER
                 || type == MiniJS.INVALID_EXPONENT
                 || type == MiniJS.INVALID_STRING
-                || type == MiniJS.UNCLOSED_REGEX
                 || type == MiniJS.UNCLOSED_STRING
                 || type == MiniJS.UNCLOSED_BLOCK_COMMENT;
     }
